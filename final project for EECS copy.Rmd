@@ -1,0 +1,150 @@
+---
+title: "Untitled"
+author: "project2BDA"
+date: "3/4/2019"
+output: html_document
+---
+
+```{r}
+##Exploratory HIV analysis
+setwd("/Users/11kolop/Downloads")
+library(data.table)
+note<-fread("NOTEEVENTS.csv")
+diagnoses<-fread("DIAGNOSES_ICD.csv")
+```
+
+```{r}
+library(dplyr)
+#notes from HIV positive patients
+ids<-diagnoses$SUBJECT_ID[diagnoses$ICD9_CODE=="042"]
+ids1<-diagnoses$SUBJECT_ID[diagnoses$ICD9_CODE!="042"]
+HIV.notes<- note %>% filter(SUBJECT_ID %in% ids)
+HIV.text<-HIV.notes$TEXT
+#text preprocessing
+HIV.text<-gsub("\n"," ",HIV.text)
+HIV.text<-gsub("\\[.*?\\]", " ", HIV.text)
+HIV.text<-gsub("[[:punct:]]"," ",HIV.text)
+HIV.text<-tolower(HIV.text)
+space<-"[[:space:]]+"
+HIV.text<-gsub(space," ",HIV.text)
+HIV.text[1]
+```
+
+```{r}
+library(tm)
+library(SnowballC)
+library(wordcloud)
+#building a corpus after removing numbers, punctuation, and stopwords
+review_corpus <-Corpus(VectorSource(HIV.text))
+review_corpus <- tm_map(review_corpus, content_transformer(tolower))
+review_corpus <- tm_map(review_corpus, removeNumbers)
+review_corpus <- tm_map(review_corpus, removePunctuation)
+review_corpus <- tm_map(review_corpus, removeWords, c("the", "and", stopwords("english")))
+review_corpus <-  tm_map(review_corpus, stripWhitespace)
+#creating a DTM from the review corpus
+review_dtm <- DocumentTermMatrix(review_corpus)
+review_dtm <- removeSparseTerms(review_dtm, 0.95)
+freq <- data.frame(sort(colSums(as.matrix(review_dtm)), decreasing=TRUE))
+#wordcloud of frequently occuring words
+wordcloud(rownames(freq), freq[,1], max.words=50, colors=brewer.pal(1, "Dark2"))
+review_dtm_tfidf <- DocumentTermMatrix(review_corpus, control = list(weighting = weightTfIdf))
+review_dtm_tfidf <- removeSparseTerms(review_dtm_tfidf, 0.95)
+freq1<-  data.frame(sort(colSums(as.matrix(review_dtm_tfidf)), decreasing=TRUE))
+wordcloud(rownames(freq1), freq1[,1], max.words=100, colors=brewer.pal(1, "Dark2"))
+
+
+
+
+```
+
+```{r}
+#reading in other charts
+admissions<-fread("ADMISSIONS 2.csv")
+CPT<-fread("CPTEVENTS.csv")
+DCPT<-fread("D_CPT.csv")
+DICDDiagnoses<-fread("D_ICD_DIAGNOSES.csv")
+DICDProcedures<-fread("D_ICD_PROCEDURES.csv")
+DItems<-fread("D_ITEMS.csv")
+Date<-fread("DATETIMEEVENTS.csv")
+Diagnosis_ICD<-fread("DIAGNOSES_ICD (1).csv")
+DRG<-fread("DRGCODES.csv")
+INPUTCV<-fread("INPUTEVENTS_CV.csv")
+INPUTMV<-fread("INPUTEVENTS_MV.csv")
+LAB<-fread("LABEVENTS (1).csv")
+MICROBIOLOGY<-fread("MICROBIOLOGYEVENTS.csv")
+PATIENTS<-fread("PATIENTS.csv")
+PRESCRIPTIONS<-fread("PRESCRIPTIONS (1).csv")
+Procedures<-fread("PROCEDURES_ICD (1).csv")
+Services<-fread("SERVICES.csv")
+note<-fread("NOTEEVENTS.csv")
+labitems<-fread("D_LABITEMS.csv")
+
+
+```
+
+```{r}
+#investigating frequencies of religion, ethnicity, marital status, and insurance
+sort(table(admissions$RELIGION),decreasing=T)
+sort(table(admissions$ETHNICITY),decreasing=T)
+sort(table(admissions$MARITAL_STATUS),decreasing=T)
+sort(table(admissions$INSURANCE),decreasing=T)
+admissions(1)
+#examining frequency of ICD Diagnosis codes,with and without HIV
+sort(table(Diagnosis_ICD$ICD9_CODE),decreasing = T)
+head(DICDDiagnoses)
+hiv.diagnoses<- Diagnosis_ICD %>% filter(SUBJECT_ID %in% ids)
+#Examining the frequency of ICD Procedure codes,with and without HIV
+sort(table(Procedures$ICD9_CODE),decreasing=T)
+head(DICDProcedures)
+hiv.procedures<- Procedures %>% filter(SUBJECT_ID %in% ids)
+#Examining the frequency of Gender,with and without HIV
+
+sort(table(PATIENTS$GENDER),decreasing = T)
+#Examining the prescription table, with and without HIV
+
+head(PRESCRIPTIONS)
+sort(table(PRESCRIPTIONS$DRUG),decreasing=T)[1:50]
+hiv.drugs<- PRESCRIPTIONS %>% filter(SUBJECT_ID %in% ids)
+sort(table(hiv.drugs$DRUG),decreasing=T)[1:50]
+
+
+
+```
+
+
+```{r}
+#basic exploratory NLP with LDA topic modelling. This was not used for our final project.
+library(tidytext)
+library(ggplot2)
+library(dplyr)
+library(ldatuning)
+
+rowTotals <- apply(review_dtm , 1, sum)
+dtm.new   <- dtm.new[rowTotals> 0, ]
+ap_lda<-LDA(dtm.new,k=25,control=list(seed=1234))
+ap_topics <- tidy(ap_lda, matrix = "beta")
+result <- FindTopicsNumber(
+          dtm.new,
+          topics = seq(from = 2, to = 200, by = 10),
+          metrics = c("Griffiths2004", "CaoJuan2009", "Arun2010", "Deveaud2014"),
+          method = "Gibbs",
+          control = list(seed = 77),
+          mc.cores = 2L,
+          verbose = TRUE)
+FindTopicsNumber_plot(result)
+
+```
+
+```{r}
+ap_top_terms <- ap_topics %>%
+     group_by(topic) %>%
+     top_n(10, beta) %>%
+     ungroup() %>%
+     arrange(topic, -beta)
+ap_top_terms %>%
+     mutate(term = reorder(term, beta)) %>%
+     ggplot(aes(term, beta, fill = factor(topic))) +
+     geom_col(show.legend = FALSE) +
+     facet_wrap(~ topic, scales = "free") +
+     coord_flip()
+```

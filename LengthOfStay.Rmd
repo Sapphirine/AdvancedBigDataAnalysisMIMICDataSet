@@ -1,0 +1,203 @@
+---
+title: "Project Milestone3"
+output: html_document
+---
+
+```{r,warning=FALSE}
+library(dplyr)
+library(data.table)
+library(gtools)
+library(Hmisc)
+library(DT)
+library(randomForest)
+library(e1071)
+setwd("/Users/jenniferlieu/Desktop/EE_Project")
+diagnoses<-fread("DIAGNOSES_ICD.csv")
+admissions<-fread("ADMISSIONS.csv")
+PATIENTS<-fread("PATIENTS.csv")
+icustays <- fread("ICUSTAYS.csv")
+```
+
+```{r}
+
+admissions$ADMITTIME <- as.POSIXct(substr(admissions$ADMITTIME, 1,10))
+admissions$DISCHTIME <- as.POSIXct(substr(admissions$DISCHTIME, 1,10))
+Length.of.Stay <- as.numeric(difftime(admissions$DISCHTIME, admissions$ADMITTIME, units="days"))
+admissions <- data.frame(admissions, Length.of.Stay)
+
+hist(Length.of.Stay[Length.of.Stay>0], breaks=80, xlim=c(0,80), xlab="Length of Stay")
+```
+
+```{r}
+white <- c("WHITE", "WHITE - RUSSIAN", "WHITE - OTHER EUROPEAN",  "WHITE - EASTERN EUROPEAN", "WHITE - BRAZILIAN", "MIDDLE EASTERN", "PORTUGUESE")
+asian <- c("ASIAN", "ASIAN - VIETNAMESE", "ASIAN - CHINESE", "ASIAN - ASIAN INDIAN", "ASIAN - FILIPINO", "ASIAN - CAMBODIAN", "ASIAN - KOREAN", "ASIAN - JAPANESE", "ASIAN - THAI", "ASIAN - OTHER")
+black <- c("BLACK/AFRICAN AMERICAN", "BLACK/AFRICAN","BLACK/CAPE VERDEAN", "BLACK/HAITIAN" )
+hispanic <- c("HISPANIC OR LATINO", "HISPANIC/LATINO - GUATEMALAN", "HISPANIC/LATINO - PUERTO RICAN", " HISPANIC/LATINO - SALVADORAN", "HISPANIC/LATINO - DOMINICAN", "HISPANIC/LATINO - CENTRAL AMERICAN (OTHER)", "HISPANIC/LATINO - COLOMBIAN","HISPANIC/LATINO - HONDURAN", "HISPANIC/LATINO - CUBAN", "HISPANIC/LATINO - MEXICAN", "SOUTH AMERICAN", "CARIBBEAN ISLAND", "HISPANIC/LATINO - SALVADORAN")
+other_unknown <- c("UNKNOWN/NOT SPECIFIED", "MULTI RACE ETHNICITY", "PATIENT DECLINED TO ANSWER", "OTHER", "UNABLE TO OBTAIN", "NATIVE HAWAIIAN OR OTHER PACIFIC ISLANDER", "AMERICAN INDIAN/ALASKA NATIVE",  "AMERICAN INDIAN/ALASKA NATIVE FEDERALLY RECOGNIZED TRIBE")
+admissions$ETHNICITY <- replace(admissions$ETHNICITY,admissions$ETHNICITY %in% white, "WHITE")
+admissions$ETHNICITY <- replace(admissions$ETHNICITY,admissions$ETHNICITY %in% black, "BLACK")
+admissions$ETHNICITY <- replace(admissions$ETHNICITY,admissions$ETHNICITY %in% hispanic, "HISPANIC")
+admissions$ETHNICITY <- replace(admissions$ETHNICITY,admissions$ETHNICITY %in% other_unknown, "OTHER_UNKNOWN")
+admissions$ETHNICITY <- replace(admissions$ETHNICITY,admissions$ETHNICITY %in% asian, "ASIAN")
+unique(admissions$ETHNICITY)
+
+boxplot(Length.of.Stay~ETHNICITY, data=admissions, at= 1:5, names = c("ASIAN", "BLACK", "HISPANIC", "OTHER","WHITE"), las = 2, horizontal = T, ylim=c(0,50))
+```
+
+```{r}
+notspec <- c("", "NOT SPECIFIED")
+religious <- c("CATHOLIC","PROTESTANT QUAKER", "JEWISH",   "BUDDHIST","OTHER","JEHOVAH'S WITNESS","GREEK ORTHODOX",     "EPISCOPALIAN","HINDU","CHRISTIAN SCIENTIST","HEBREW",        "METHODIST","UNITARIAN-UNIVERSALIST","BAPTIST",           "7TH DAY ADVENTIST","MUSLIM","ROMANIAN EAST. ORTH",   
+"LUTHERAN")
+admissions$RELIGION <- replace(admissions$RELIGION ,admissions$RELIGION  %in% notspec, "Not Specified")
+admissions$RELIGION  <- replace(admissions$RELIGION ,admissions$RELIGION  %in% religious, "Religious")
+unique(admissions$RELIGION )
+barchart(admissions$RELIGION)
+```
+
+```{r}
+boxplot(Length.of.Stay~ADMISSION_TYPE,at= 1:4, names = c("ELECTIVE", "EMERGENCY", "NEWBORN", "URGENT"), las = 2, data=admissions, horizontal = T, ylim=c(0,50))
+```
+
+```{r}
+boxplot(Length.of.Stay~INSURANCE,at= 1:5, names = c("Self Pay", "Private", "Medicare", "Medicaid", "Government"), las = 2, data=admissions, horizontal = T, ylim=c(0,50))
+```
+
+```{r}
+dob1<-PATIENTS[,c(2,4)]
+admissions <- as.data.table(admissions)
+admissions<-merge(admissions,dob1,by="SUBJECT_ID",all=T)
+admissions$age<-as.numeric(difftime(as.Date(admissions$ADMITTIME), as.Date(admissions$DOB), unit="weeks"))/52.25
+hist(admissions$age)
+plot(admissions$age, admissions$Length.of.Stay)
+
+age.name<-"age"
+cuts.age <- c(10,20,30, 40,50, 60,70, 80, 90, 320)
+admissions[, eval(age.name) := cut2(x = get(age.name), cuts = cuts.age)]
+```
+
+```{r}
+admissions1<-admissions[,c(1:3,7,10:14,18,20,22)]
+diagnoses1<-diagnoses[,-c(1:2)]
+patients<-PATIENTS[,c(2:3)]
+```
+
+```{r}
+new.var.dia<-function(x,y){
+a<-which(diagnoses1$ICD9_CODE == hivdia[x])
+b<-diagnoses1[a,]$HADM_ID
+y %in% b}
+
+hivdia<-names(sort(table(diagnoses$ICD9_CODE), decreasing=T)[1:30])
+admissions2<-merge(admissions1,patients,by="SUBJECT_ID",all=T)
+newvars.dia<-data.frame(matrix(nrow=58976,ncol=30))
+for(i in 1:30){
+  newvars.dia[,i]<-new.var.dia(i,admissions2$HADM_ID)
+}
+colnames(newvars.dia)<-paste(hivdia,".dia")
+admissions.final.1<-cbind(admissions2,newvars.dia)
+
+final<-admissions.final.1[,-c(1:3,10)]
+colnames(final) <- sub(" ",".", colnames(final))
+colnames(final)[10:39]<- paste("X",colnames(final)[10:39], sep="" )
+```
+
+```{r}
+datax <- data.frame(id = 1:58976)
+for(i in 1:dim(final)[2]){
+  datax <- data.frame(datax, factor(final[[i]]))
+}
+datax <- datax[,2:40]
+datax <- datax[,-c(3,7)]
+colnames(datax) <- colnames(final[,-c(3,7)])
+datay <- final$Length.of.Stay
+dat <- cbind(datax, datay)
+sample <- sample(1:dim(datax)[1], round(.8*dim(datax)[1]))
+trainx <- datax[sample,]
+testx <- datax[-sample,]
+trainy <- datay[sample]
+testy <- datay[-sample]
+train <- cbind(trainx, trainy)
+test <- train <- cbind(testx, testy)
+colnames(train)[38] <- "LOS"
+colnames(test)[38] <- "LOS"
+```
+
+```{r}
+los.lm <- lm(LOS~., data=train)
+los.lm2 <- lm(LOS~., data=train)
+pred.lm <- predict(los.lm, newx=as.matrix(testx))
+pred.lm2 <- predict(los.lm2, newx=as.matrix())
+errorlm <- sqrt(sum((pred.lm-testy)^2)/length(testy))
+errorlm
+```
+
+```{r}
+datax <- data.frame(id = 1:58976)
+for(i in 1:dim(hiv)[2]){
+  hiv <- data.frame(datax, factor(hiv[[i]]))
+}
+
+#make models
+library(randomForest)
+library(e1071)
+los.mod<-randomForest(datay~.,data=los)
+hiv.mod <- rand<-nnet(HIV~.,data=hiv)
+hiv.mod <- hiv.mod[,-3]
+colnames(hiv)[68] <-"HIV" 
+```
+
+
+
+```{r}
+library(glmnet)
+
+x <- model.matrix( ~ ., train)
+glmtemp <-  glmnet(x, y= train$LOS, family="poisson", alpha=1)
+xx <- model.matrix( ~ ., test)
+  pred.glm <- predict(glmtemp, newx = xx)
+  pred.glm2 <- predict(glmtemp, newx = model.matrix( ~ ., train))
+  
+  lassoerror <- sqrt(sum((pred.glm-testy)^2)/length(testy))
+  lassoerror
+```
+
+```{r}
+rand<-randomForest(LOS~.,data=train[,-3])
+predrf<-predict(rand,test[,-3])
+predrf2<-predict(rand,train[,-3])
+errorrf<-sqrt(sum((predrf-testy)^2)/length(testy))
+errorrf
+```
+
+```{r}
+library(gbm)
+
+ gbm.obj <- gbm(LOS~., data=train, interaction.depth=1)
+  prob.label <- predict(gbm.obj, n.trees=100, newx=as.matrix(testx))
+   prob.label2 <- predict(gbm.obj, n.trees=100, newx=as.matrix(trainx))
+  errorgbm<-sqrt(sum((prob.label-testy)^2)/length(testy))
+errorgbm
+```
+
+```{r}
+p <- 38
+muy <- rep(mean(trainy), dim(trainx)[1])
+
+adjr <- function(x){
+  num <- 1/(dim(trainx)[1]-p-1)*sum((x-trainy)^2)
+  den <- 1/(dim(trainx)[1]-1)*sum((muy-x)^2)
+  r <- num/den
+  return(r)
+}
+Adjusted_R_Sq <- c(adjr(pred.lm2), adjr(pred.glm2), adjr(predrf2), adjr(prob.label2))
+```
+
+#Adjusted R^2
+#taking out newborns
+```{r}
+Algorithm <- c("Linear Model", "Poisson GLM", "Random Forest", "Gradient Boosting Model")
+Error <- c(errorlm, lassoerror, errorrf, errorgbm, prob.label)
+
+finaltab <- as.data.table(data.frame(Algorithm, Error, Adjusted_R_Sq))
+finaltab
+```

@@ -1,0 +1,343 @@
+---
+title: "projectmileston2"
+author: "project2BDA"
+date: "4/1/2019"
+output: html_document
+---
+
+```{r}
+#load required packages and datasets
+library(dplyr)
+library(neuralnet)
+library(ggplot2)
+library(data.table)
+library(gtools)
+library(randomForest)
+library(arm)
+library(Hmisc)
+library(caret)
+library(scales)
+setwd("/Users/11kolop/MIMIC-III/")
+diagnoses<-fread("DIAGNOSES_ICD.csv")
+admissions<-fread("ADMISSIONS.csv")
+LAB<-fread("LABEVENTS.csv")
+PATIENTS<-fread("PATIENTS.csv")
+Procedures<-fread("PROCEDURES_ICD.csv")
+labitems<-fread("D_LABITEMS.csv")
+DICDDiagnoses<-fread("D_ICD_DIAGNOSES.csv")
+DICDProcedures<-fread("D_ICD_PROCEDURES.csv")
+DItems<-fread("D_ITEMS.csv")
+output<-fread("OUTPUTEVENTS.csv")
+services<-fread("SERVICES.csv")
+charts<-fread("/Users/11kolop/Downloads/data-1554330471995.csv")
+
+
+```
+
+```{r}
+###Removing unecessary variables
+admissions1<-admissions[,c(2:4,7,10,13:14,18)]
+procedures<-Procedures[,-c(1:2)]
+diagnoses1<-diagnoses[,-c(1:2)]
+patients<-PATIENTS[,c(2:3)]
+lab<-LAB[,c(2,3:4,6)]
+```
+```{r,warning=FALSE}
+###Cleaning the lab values
+lab1<-na.omit(lab)
+num<-"[0.9]"
+lab2<-lab1[grepl(num,lab1$VALUE),]
+lab2$VALUE<-gsub("[A-Za-z]","",lab2$VALUE)
+#lab2$VALUE<-gsub("[[:punct:]]","",lab2$VALUE)
+lab2$VALUE<-as.numeric(lab2$VALUE)
+lab2<-na.omit(lab2)
+lab3<-dcast(lab2,HADM_ID~ITEMID,value.var = "VALUE",fun=mean)
+data.table(lab3)
+```
+
+```{r}
+##Subject and Hadm codes for HIV positive patients
+ids<-diagnoses$SUBJECT_ID[diagnoses$ICD9_CODE=="042"]
+ids1<-diagnoses$HADM_ID[diagnoses$ICD9_CODE=="042"]
+#hiv positive admissions
+hiv.admissions<-admissions %>%filter(SUBJECT_ID %in% ids)
+data.table(hiv.admissions)
+```
+
+```{r}
+##Diagnoses which occurred most commonly in HIV patients
+h<-which(diagnoses$SUBJECT_ID %in% ids)
+hiv_diagnoses<-diagnoses$ICD9_CODE[h]
+tophivdiagnoses<-sort(table(hiv_diagnoses),decreasing=T)
+hivdia<-names(tophivdiagnoses[2:31])
+
+##Procedures which occured most commonly in HIV patients 
+i<-which(Procedures$SUBJECT_ID %in% ids)
+hiv_procedures<-Procedures$ICD9_CODE[i]
+tophivprocedures<-sort(table(hiv_procedures),decreasing=T)
+hivpro<-names(tophivprocedures[1:30])
+
+#Values which are most commonly measured in HIV Patients
+v<-which(lab$SUBJECT_ID %in% ids)
+hiv_lab<-lab[v][,2:4]
+lab1.1<-na.omit(hiv_lab)
+num<-"[0.9]"
+lab2.1<-lab1.1[grepl(num,lab1.1$VALUE),]
+lab2.1$VALUE<-gsub("[A-Za-z]","",lab2.1$VALUE)
+#lab2.1$VALUE<-gsub("[[:punct:]]","",lab2.1$VALUE)
+lab2.1$VALUE<-as.numeric(lab2.1$VALUE)
+lab2.1<-na.omit(lab2.1)
+lab3.1<-dcast(lab2.1,HADM_ID~ITEMID,value.var = "VALUE",fun=mean)
+lab3.1.na<-apply(lab3.1,2,is.na)
+lab3.1.sum<-apply(lab3.1.na,2,sum)
+lab3.1.final<-names(lab3.1.sum[order(lab3.1.sum)][1:31])
+
+#Values which are most commonly measured in  Patients
+lab3.na<-apply(lab3,2,is.na)
+lab3.sum<-apply(lab3.na,2,sum)
+lab3.final<-names(lab3.sum[order(lab3.sum)][1:31])
+
+##Creating an age variable
+dob1<-PATIENTS[,c(2,4)]
+admissionsnew<-merge(admissions,dob1,by="SUBJECT_ID",all=T)
+admissionsnew$age<-as.numeric(difftime(as.Date(admissionsnew$ADMITTIME), as.Date(admissionsnew$DOB), 
+                      unit="weeks"))/52.25
+admissions1<-admissionsnew[,c(1:4,7,10:14,18,21)]
+admissions2<-merge(admissions1,patients,by="SUBJECT_ID",all=T)
+
+hiv.icdd<-DICDDiagnoses %>% filter(ICD9_CODE %in% hivdia)
+hiv.icdp<-DICDProcedures %>% filter(ICD9_CODE %in% hivpro)
+hiv.lab<-labitems %>% filter (ITEMID %in% lab3.1.final[2:31])
+total.lab<-labitems %>% filter (ITEMID %in% lab3.final[2:31])
+ggplot(admissions2, aes(SUBJECT_ID, age, colour = GENDER)) + 
+  geom_point()
+ggplot(admissions2, aes(x=factor(GENDER)))+
+  geom_bar(stat="count", width=0.7, fill="steelblue")+
+  theme_minimal()
+data.table(hiv.icdd)
+data.table(hiv.icdp)
+data.table(hiv.lab)
+data.table(total.lab)
+
+
+```
+
+```{r,warning=FALSE}
+##Diagnoses Variables
+new.var.dia<-function(x,y){
+a<-which(diagnoses1$ICD9_CODE == hivdia[x])
+b<-diagnoses1[a,]$HADM_ID
+y %in% b}
+newvars.dia<-data.frame(matrix(nrow=58976,ncol=30))
+for(i in 1:30){
+  newvars.dia[,i]<-new.var.dia(i,admissions2$HADM_ID)}
+##Procedure Variables
+new.var.pro<-function(x,y){
+a<-which(procedures$ICD9_CODE == hivpro[x])
+b<-procedures[a,]$HADM_ID
+y %in% b}
+newvars.pro<-data.frame(matrix(nrow=58976,ncol=30))
+for(i in 1:30){
+  newvars.pro[,i]<-new.var.pro(i,admissions2$HADM_ID)}
+colnames(newvars.dia)<-paste(hivdia,"dia")
+colnames(newvars.pro)<-paste(hivpro,"pro")
+admissions.final.1<-cbind(admissions2,newvars.dia,newvars.pro)
+
+##Lab Values
+labsub2<-which(colnames(lab3)%in%lab3.1.final)
+labsub1<-which(colnames(lab3)%in%lab3.final)
+labsub<-unique(c(labsub2,labsub1))
+sub.lab<-lab3[,..labsub]
+total.chart<-merge(admissions.final.1,sub.lab,by="HADM_ID",all=T)
+
+#HIV variable coding
+ids<-diagnoses$SUBJECT_ID[diagnoses$ICD9_CODE=="042"]
+a<-which(total.chart$SUBJECT_ID %in% ids)
+total.chart$HIV[a]<-1
+total.chart$HIV[-a]<-0
+total.chart1<-total.chart[,-c(1,2,3)]
+#graphs of gender and marital status with regards to HIV
+ggplot(total.chart, aes(x=GENDER,y=HIV,color=GENDER))+
+          geom_bar(stat="identity", width=0.7,)+
+            theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+
+ggplot(total.chart, aes(x=MARITAL_STATUS,y=HIV,color=MARITAL_STATUS))+
+          geom_bar(stat="identity", width=0.7,)+
+            theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+
+```
+
+```{r}
+##age cuts
+age.name<-"age"
+cuts.age <- c(10,20,30, 40,50, 60,70, 80, 90, 320)
+total.chart1[, eval(age.name) := cut2(x = get(age.name), cuts = cuts.age)]
+
+cut.factor<-function(x){
+a<-as.factor(cut(x,c(quantile(x,.2,na.rm=T),quantile(x,.4,na.rm=T),quantile(x,.6,na.rm=T),quantile(x,.8,na.rm=T))))
+return(a)}
+#final dataframe for model building
+dat<-data.frame(matrix(nrow=58976,ncol=33))
+dat1<-total.chart1[,71:103]
+dat<-apply(dat1,2,cut.factor)
+dat[is.na(dat)]<-"Imputed"
+final<-cbind(total.chart1[,1:70],dat,total.chart1[,104])
+final<-final[,-c(1,4,5,7,8)]
+final<-apply(final,2,as.factor)
+final<-data.frame(final)
+head(final,10)
+ggplot(total.chart1, aes(x=factor(age),color=factor(age)))+
+          geom_bar(stat="count", width=0.7)
+data.table(final)
+```
+
+```{r}
+#training test split
+abc<-sample(nrow(final),.9*nrow(final),replace=F)
+train<-final[abc,]
+test<-final[-abc,]
+```
+
+```{r}
+#baseline logistic model
+glm.fit<-glm(HIV~.,data=train,family="binomial")
+predictions<-predict(glm.fit,test,type="response")
+predictions[predictions<.5]<-0
+predictions[predictions>.5]<-1
+error<-mean(predictions!=test$HIV)
+error
+```
+
+
+```{r}
+#random forest model
+rand<-randomForest(HIV~.,data=train)
+pred<-predict(rand,test)
+err<-mean(pred!=test$HIV)
+err
+```
+
+```{r}
+#mortality prediction and feature selection/engineering
+#selecting relevant admissions variables from unique subjects
+ad<-admissions1[,c(1,3,4,5,11,12)]
+ad<-ad[order(ad[,1],ad[,3],decreasing=F),]
+ad1<-duplicated(ad$SUBJECT_ID)
+ad<-ad[!ad1,]
+adids<-ad$HADM_ID
+
+#relevant output,services, and charts data
+output<- output %>% filter(HADM_ID %in% adids)
+
+services<-services %>% filter(HADM_ID %in% adids)
+
+charts<-charts %>% filter(hadm_id %in% adids)
+
+outputids<-c(40055,43175,40069,40094,40715,40473,40085,40057,40056,40405,40428,40086,40096,40651,226559,226560,226561,226584,226563,226564,226565,226567,226557,226558,227488,227489)
+labids<-c(50821,50816,51006,51300,51301,50882,950824,50983,50822,50971,50885)
+
+outputs<-DItems %>% filter(ITEMID %in% outputids)
+lab_ids<-labitems %>% filter(ITEMID %in% labids)
+chart_ids<-DItems %>% filter(ITEMID %in% charts$itemid )
+
+cha1<-charts[,-1]
+cha1[cha1=="NULL"]<-"NA"
+cha1$valuenum<-as.numeric(cha1$valuenum)
+cha2<-na.omit(cha1)
+colnames(cha2)<-c("HADM_ID","ITEMID","VALUENUM")
+cha3<-dcast(cha2,HADM_ID~ITEMID,value.var="VALUENUM",fun=mean,na.rm=T)
+la<-LAB %>% filter(ITEMID %in% labids)
+la<-na.omit(la)
+la1<-la[,c(3,4,6)]
+la1$VALUE<-as.numeric(la1$VALUE)
+la2<-dcast(la1,HADM_ID~ITEMID,value.var= "VALUE",fun=mean)
+out<- output %>% filter(ITEMID %in% outputids)
+out1<-out[,c(2,3,6,7)]
+out1<-na.omit(out1)
+out1$VALUE<-as.numeric(out1$VALUE)
+out2<-dcast(out1,HADM_ID~ITEMID,value.var = "VALUE",fun=mean,na.rm=T)
+
+
+
+ser<-services[,c(2,3,6)]
+ser<-ser %>% filter(HADM_ID %in% adids)
+#final data table
+z<-merge(ad,ser,by="HADM_ID",all=T)
+Z1<-merge(z,la2,by="HADM_ID",all=T)
+z2<-merge(Z1,out2,by="HADM_ID",all=T)
+z3<-merge(z2,cha3,by="HADM_ID",all=T)
+z<-z3[,-c(1,2,3,7)]
+z$ADMISSION_TYPE<-as.factor(z$ADMISSION_TYPE)
+z$HOSPITAL_EXPIRE_FLAG<-as.factor(z$HOSPITAL_EXPIRE_FLAG)
+z$CURR_SERVICE<-as.factor(z$CURR_SERVICE)
+colnames(z)<-paste("VAL",colnames(z),sep="")
+
+
+#binning variables to account for missing data
+cut.factor.binary<-function(x){
+a<-as.factor(cut(x,unique(c(quantile(x,.25,na.rm=T),quantile(x,.5,na.rm=T),quantile(x,.75,na.rm=T)))))
+return(a)}
+datz<-apply(z[,5:60],2,cut.factor.binary)
+datz[is.na(datz)]<-"Imputed"
+datz<-data.frame(apply(datz,2,as.factor))
+z.final<-cbind(z[,1:4],datz)
+z.final<-data.frame(z.final)
+z.final<-na.omit(z.final)
+
+
+sam<-sample(nrow(z.final),.9*nrow(z.final),replace=F)
+z.train<-z.final[sam,]
+z.test<-z.final[-sam,]
+
+data.table(outputs)
+data.table(lab_ids)
+data.table(chart_ids)
+data.table(z.final)
+ggplot(z.final, aes(x=factor(VALADMISSION_TYPE),fill=factor(VALADMISSION_TYPE)))+
+ geom_bar(stat="count", width=0.7 )+
+     theme_minimal()
+ggplot(z.final, aes(x=factor(VALCURR_SERVICE),fill=factor(VALCURR_SERVICE)))+
+ geom_bar(stat="count", width=0.7 )+
+     theme(axis.title.x=element_blank(),
+        axis.text.x=element_blank(),
+        axis.ticks.x=element_blank())
+
+```
+
+```{r}
+#logistic model to predict mortality
+model2<-glm(VALHOSPITAL_EXPIRE_FLAG~.,data=z.train,family="binomial")
+pr<-predict(model2,z.test,type="response")
+df<-data.frame(number=1:length(pr),predicted=pr,actual=z.test$VALHOSPITAL_EXPIRE_FLAG)
+ggplot(df, aes(number, predicted, colour = actual)) + geom_point()
+pr1<-pr
+pr1[pr1<.5]<-0
+pr1[pr1>.5]<-1
+pr1<-as.factor(pr1)
+cfm <- confusionMatrix(z.test$VALHOSPITAL_EXPIRE_FLAG, pr1)
+ggplotConfusionMatrix <- function(m){
+  mytitle <- paste("Accuracy", percent_format()(m$overall[1]),
+                   "Kappa", percent_format()(m$overall[2]))
+  data_c <-  mutate(group_by(as.data.frame(m$table), Reference ), percentage = 
+percent(Freq/sum(Freq)))
+  p <-
+    ggplot(data = data_c,
+           aes(x = Reference, y = Prediction)) +
+    geom_tile(aes(fill = log(Freq)), colour = "white") +
+    scale_fill_gradient(low = "white", high = "green") +
+    geom_text(aes(x = Reference, y = Prediction, label = percentage)) +
+    theme(legend.position = "none") +
+    ggtitle(mytitle)
+  return(p)
+}
+#confusion matrix with accuracy
+ggplotConfusionMatrix(cfm)
+
+```
+
+
+
